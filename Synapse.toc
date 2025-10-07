@@ -1,13 +1,13 @@
 ## Interface: 11200
 ## Title: Synapse
-## Notes: Modular combat engine for Turtle/Vanilla (multi-class)
-## Author: Neimad-MP
+## Notes: Modular combat engine for Turtle/Vanilla
+## Author: neimad-mp
 ## Version: 0.1.0
 ## SavedVariables: SynapseDB
 
+Synapse.lua
 Core/Utils.lua
 Core/Engine.lua
 Core/Events.lua
-Core/Synapse.lua
 Modules/Rogue.lua
 Bindings.xml
