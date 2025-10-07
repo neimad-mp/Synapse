@@ -1,0 +1,5 @@
+<Bindings>
+  <Binding name="SYNAPSE_CAST" header="Synapse">
+    Synapse.Click();
+  </Binding>
+</Bindings>
