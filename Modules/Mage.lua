@@ -3,8 +3,11 @@
 
 local Mage = {
   Name    = "Mage (Synapse scaffold)",
-  Version = "0.1",
+  Version = "0.2",
 }
+
+-- Ensure Synapse exists (just in case)
+Synapse = Synapse or {}
 
 ------------------------------------------------------------
 -- Spellbook utilities
@@ -18,6 +21,10 @@ local function SpellIndex(name)
     if s == name then Mage.SB[name] = i; return i end
   end
   return nil
+end
+
+local function HasSpell(name)
+  return SpellIndex(name) ~= nil
 end
 
 local function SpellReady(name)
@@ -37,64 +44,52 @@ local function ValidTarget()
   return UnitExists("target") and UnitCanAttack("player", "target")
 end
 
--- Crude melee-range detector (works well enough for Nova decisions)
-local function IsTargetInMelee()
-  -- In Vanilla, exact range checking via API is limited; use weapon swing as hint.
-  -- We’ll rely on player being hit / aura hooks optionally later.
-  return CheckInteractDistance and CheckInteractDistance("target", 3) -- 3 = melee-ish
+-- Crude melee-ish range (Vanilla-friendly)
+local function InMelee()
+  return CheckInteractDistance and CheckInteractDistance("target", 3)
 end
 
 ------------------------------------------------------------
--- Costs (approx; Turtle cores vary a bit by rank)
+-- Approx costs (varies by rank; just guards)
 ------------------------------------------------------------
 local COST = {
-  ["Fireball"]     = 95,
-  ["Frostbolt"]    = 75,
-  ["Fire Blast"]   = 110,
-  ["Frost Nova"]   = 75,
-  ["Counterspell"] = 0,
-  ["Arcane Missiles"] = 150,
+  ["Fireball"]       = 95,
+  ["Frostbolt"]      = 75,
+  ["Fire Blast"]     = 110,
+  ["Frost Nova"]     = 75,
+  ["Counterspell"]   = 0,
+  ["Arcane Missiles"]= 150,
 }
 
 ------------------------------------------------------------
--- Rotation
--- Priorities (very simple):
--- 1) Counterspell if target is (likely) casting.
--- 2) If target in melee, Frost Nova (if safe/ready).
--- 3) Fire Blast on cooldown for instant DPS (optional).
--- 4) Main nuke: Frostbolt (or Fireball fallback).
--- 5) Arcane Missiles as safe channel fallback when moving logic is absent.
+-- Rotation (HasSpell-gated)
 ------------------------------------------------------------
 local function NextSpell()
   if not ValidTarget() then return nil end
 
   -- 1) Interrupt
-  if Synapse and Synapse.IsTargetCasting and Synapse.IsTargetCasting() then
-    if SpellReady("Counterspell") then
-      return "Counterspell", COST["Counterspell"]
-    end
+  if HasSpell("Counterspell") and Synapse.IsTargetCasting and Synapse.IsTargetCasting() then
+    if SpellReady("Counterspell") then return "Counterspell", COST["Counterspell"] end
   end
 
-  -- 2) Frost Nova if in melee range (keep it conservative)
-  if IsTargetInMelee() and SpellReady("Frost Nova") and Mana() >= COST["Frost Nova"] then
+  -- 2) Frost Nova if in melee (if known)
+  if InMelee() and HasSpell("Frost Nova") and SpellReady("Frost Nova") and Mana() >= (COST["Frost Nova"] or 0) then
     return "Frost Nova", COST["Frost Nova"]
   end
 
-  -- 3) Instant filler
-  if SpellReady("Fire Blast") and Mana() >= COST["Fire Blast"] then
+  -- 3) Instant filler if known
+  if HasSpell("Fire Blast") and SpellReady("Fire Blast") and Mana() >= (COST["Fire Blast"] or 0) then
     return "Fire Blast", COST["Fire Blast"]
   end
 
-  -- 4) Main nuke
-  if Mana() >= COST["Frostbolt"] and SpellIndex("Frostbolt") then
+  -- 4) Main nuke: prefer Frostbolt if known, else Fireball, else Missiles
+  if HasSpell("Frostbolt") and Mana() >= (COST["Frostbolt"] or 0) then
     return "Frostbolt", COST["Frostbolt"]
   end
-  if Mana() >= COST["Fireball"] and SpellIndex("Fireball") then
+  if HasSpell("Fireball") and Mana() >= (COST["Fireball"] or 0) then
     return "Fireball", COST["Fireball"]
   end
-
-  -- 5) Channel fallback
-  if Mana() >= COST["Arcane Missiles"] and SpellIndex("Arcane Missiles") then
+  if HasSpell("Arcane Missiles") and Mana() >= (COST["Arcane Missiles"] or 0) then
     return "Arcane Missiles", COST["Arcane Missiles"]
   end
 
@@ -110,7 +105,6 @@ function Mage:OnClick()
   end
   if not ValidTarget() then return end
 
-  -- (No auto-attack for casters)
   local spell, need = NextSpell()
   if not spell then return end
   if need and Mana() < need then return end
@@ -119,25 +113,23 @@ function Mage:OnClick()
 end
 
 function Mage:OnLogin()
-  if Synapse and Synapse.Print then
-    Synapse.Print("Mage module ready. /synapse click to test.")
-  else
-    DEFAULT_CHAT_FRAME:AddMessage("|cff00ffaa[Synapse]|r Mage module ready. /synapse click to test.")
-  end
+  if Synapse.Print then Synapse.Print("Mage module ready. /synapse click to test.")
+  else DEFAULT_CHAT_FRAME:AddMessage("|cff00ffaa[Synapse]|r Mage module ready. /synapse click to test.") end
 end
 
--- Optional event hooks a future module could implement
+-- Optional hooks
 function Mage:OnEvent(ev, a1,a2,a3,a4,a5) end
 function Mage:OnAura(unit) end
 function Mage:OnTargetChange() end
 
 ------------------------------------------------------------
--- Registration
+-- Registration (hard-safe)
 ------------------------------------------------------------
-if Synapse and Synapse.RegisterModule then
+Synapse.Modules = Synapse.Modules or {}
+Synapse.PendingModules = Synapse.PendingModules or {}
+if type(Synapse.RegisterModule) == "function" then
   Synapse.RegisterModule("MAGE", Mage)
 else
-  Synapse = Synapse or {}
-  Synapse.PendingModules = Synapse.PendingModules or {}
+  Synapse.Modules["MAGE"] = Mage
   Synapse.PendingModules["MAGE"] = Mage
 end

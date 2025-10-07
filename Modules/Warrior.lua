@@ -3,8 +3,10 @@
 
 local Warrior = {
   Name    = "Warrior (Synapse scaffold)",
-  Version = "0.1",
+  Version = "0.2",
 }
+
+Synapse = Synapse or {}
 
 ------------------------------------------------------------
 -- Spellbook utilities
@@ -20,6 +22,10 @@ local function SpellIndex(name)
   return nil
 end
 
+local function HasSpell(name)
+  return SpellIndex(name) ~= nil
+end
+
 local function SpellReady(name)
   local idx = SpellIndex(name)
   if not idx then return false end
@@ -30,86 +36,75 @@ local function SpellReady(name)
 end
 
 ------------------------------------------------------------
--- Helpers (Warrior uses Rage via UnitMana in Vanilla)
+-- Helpers (Rage uses UnitMana in 1.12)
 ------------------------------------------------------------
 local function Rage() return UnitMana("player") or 0 end
-local function ValidTarget()
-  return UnitExists("target") and UnitCanAttack("player", "target")
-end
+local function ValidTarget() return UnitExists("target") and UnitCanAttack("player", "target") end
 
--- Health % helper (for Execute threshold)
 local function TargetHealthPct()
-  local hp = UnitHealth("target")
-  local hpmax = UnitHealthMax("target")
+  local hp = UnitHealth("target"); local hpmax = UnitHealthMax("target")
   if not hp or not hpmax or hpmax == 0 then return 100 end
   return math.floor((hp / hpmax) * 100)
 end
 
 ------------------------------------------------------------
--- Costs (approx; rank-dependent in Vanilla)
+-- Approx costs (rank-dependent)
 ------------------------------------------------------------
 local COST = {
   ["Heroic Strike"] = 15,
   ["Rend"]          = 10,
   ["Hamstring"]     = 10,
-  ["Bloodrage"]     = 0,   -- generates rage over time
-  ["Execute"]       = 15,  -- plus consumes remaining rage
+  ["Bloodrage"]     = 0,
+  ["Execute"]       = 15,
   ["Overpower"]     = 5,
   ["Sunder Armor"]  = 15,
-  ["Pummel"]        = 10,  -- Berserker Stance; keep optional
+  ["Pummel"]        = 10,
 }
 
 ------------------------------------------------------------
--- Basic rotation priorities:
--- 1) Interrupt if (likely) casting: Pummel (if spell exists & stance allows).
--- 2) Execute if target <=20% and enough rage.
--- 3) Keep Rend (if not immune/undead/etc.—no detection here, simple).
--- 4) Sunder Armor as filler if rage allows (optional).
--- 5) Heroic Strike as main spender (simple).
--- 6) Hamstring if target is fleeing (not detected here; leave as manual).
--- 7) Use Bloodrage if rage is very low to kickstart.
+-- Rotation (HasSpell-gated; simple)
 ------------------------------------------------------------
 local function NextAbility()
   if not ValidTarget() then return nil end
   local r = Rage()
   local hpct = TargetHealthPct()
 
-  -- 1) Interrupt
-  if Synapse and Synapse.IsTargetCasting and Synapse.IsTargetCasting() then
-    if SpellIndex("Pummel") and SpellReady("Pummel") and r >= COST["Pummel"] then
+  -- 1) Interrupt if known (stance not managed here)
+  if HasSpell("Pummel") and Synapse.IsTargetCasting and Synapse.IsTargetCasting() then
+    if SpellReady("Pummel") and r >= (COST["Pummel"] or 0) then
       return "Pummel", COST["Pummel"]
     end
   end
 
   -- 2) Execute
-  if hpct <= 20 and SpellIndex("Execute") and r >= COST["Execute"] then
+  if HasSpell("Execute") and hpct <= 20 and r >= (COST["Execute"] or 0) then
     return "Execute", COST["Execute"]
   end
 
-  -- 7) Bloodrage to bootstrap (if very low rage)
-  if r < 15 and SpellIndex("Bloodrage") and SpellReady("Bloodrage") then
+  -- 3) Bootstrap rage
+  if HasSpell("Bloodrage") and r < 15 and SpellReady("Bloodrage") then
     return "Bloodrage", COST["Bloodrage"]
   end
 
-  -- 3) Keep Rend up (very naive — no bleed immunity checks)
-  -- Texture check for debuffs is possible; keeping it simple for scaffold.
-  if SpellIndex("Rend") and SpellReady("Rend") and r >= COST["Rend"] then
-    -- Optional: gate on missing debuff (skipped for scaffold)
+  -- 4) Rend (very naive—no undead/immune detection)
+  if HasSpell("Rend") and SpellReady("Rend") and r >= (COST["Rend"] or 0) then
+    -- Uncomment to enforce early bleed:
     -- return "Rend", COST["Rend"]
   end
 
-  -- 4) Sunder Armor (optional armor shred)
-  if SpellIndex("Sunder Armor") and SpellReady("Sunder Armor") and r >= COST["Sunder Armor"] then
+  -- 5) Sunder (optional shred)
+  if HasSpell("Sunder Armor") and SpellReady("Sunder Armor") and r >= (COST["Sunder Armor"] or 0) then
+    -- Uncomment if you want to stack Sunder by default:
     -- return "Sunder Armor", COST["Sunder Armor"]
   end
 
-  -- 5) Heroic Strike as a reliable filler
-  if SpellIndex("Heroic Strike") and r >= COST["Heroic Strike"] then
+  -- 6) Main filler
+  if HasSpell("Heroic Strike") and r >= (COST["Heroic Strike"] or 0) then
     return "Heroic Strike", COST["Heroic Strike"]
   end
 
-  -- 6) Hamstring (manual/conditional; omitted by default)
-  -- if SpellIndex("Hamstring") and r >= COST["Hamstring"] then
+  -- 7) Hamstring (manual situational; usually when fleeing)
+  -- if HasSpell("Hamstring") and r >= (COST["Hamstring"] or 0) then
   --   return "Hamstring", COST["Hamstring"]
   -- end
 
@@ -127,33 +122,31 @@ function Warrior:OnClick()
 
   AttackTarget()
 
-  local ability, need = NextAbility()
-  if not ability then return end
+  local ab, need = NextAbility()
+  if not ab then return end
   if need and Rage() < need then return end
 
-  CastSpellByName(ability)
+  CastSpellByName(ab)
 end
 
 function Warrior:OnLogin()
-  if Synapse and Synapse.Print then
-    Synapse.Print("Warrior module ready. /synapse click to test.")
-  else
-    DEFAULT_CHAT_FRAME:AddMessage("|cff00ffaa[Synapse]|r Warrior module ready. /synapse click to test.")
-  end
+  if Synapse.Print then Synapse.Print("Warrior module ready. /synapse click to test.")
+  else DEFAULT_CHAT_FRAME:AddMessage("|cff00ffaa[Synapse]|r Warrior module ready. /synapse click to test.") end
 end
 
--- Optional event hooks for future expansion
+-- Optional hooks
 function Warrior:OnEvent(ev, a1,a2,a3,a4,a5) end
 function Warrior:OnAura(unit) end
 function Warrior:OnTargetChange() end
 
 ------------------------------------------------------------
--- Registration
+-- Registration (hard-safe)
 ------------------------------------------------------------
-if Synapse and Synapse.RegisterModule then
+Synapse.Modules = Synapse.Modules or {}
+Synapse.PendingModules = Synapse.PendingModules or {}
+if type(Synapse.RegisterModule) == "function" then
   Synapse.RegisterModule("WARRIOR", Warrior)
 else
-  Synapse = Synapse or {}
-  Synapse.PendingModules = Synapse.PendingModules or {}
+  Synapse.Modules["WARRIOR"] = Warrior
   Synapse.PendingModules["WARRIOR"] = Warrior
 end

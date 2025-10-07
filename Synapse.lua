@@ -4,6 +4,15 @@
 Synapse   = Synapse or {}
 SynapseDB = SynapseDB or { settings = { debug = false }, }
 
+-- Ensure core tables exist early
+Synapse.Modules         = Synapse.Modules or {}
+Synapse.PendingModules  = Synapse.PendingModules or {}
+
+-- Keybinding strings (must exist before Bindings.xml loads) ------------------
+BINDING_HEADER_SYNAPSE    = "Synapse"
+BINDING_NAME_SYNAPSE_CAST = "Synapse Cast (Click Active Module)"
+
+
 -- Safe print helpers ---------------------------------------------------------
 function Synapse.Print(msg, r, g, b)
   DEFAULT_CHAT_FRAME:AddMessage("|cff00ffaa[Synapse]|r " .. tostring(msg), r or 1, g or 1, b or 1)
@@ -21,13 +30,42 @@ function Synapse.PlayerClass()
   return class
 end
 
+-- ***** CRITICAL FALLBACKS ***************************************************
+-- If Engine hasn't defined these yet, define safe versions here.
+if not Synapse.RegisterModule then
+  function Synapse.RegisterModule(class, mod)
+    if not class or not mod then return end
+    Synapse.Modules[class] = mod
+    mod.Class = class
+    dprint("[fallback] Registered module for class: " .. class .. (mod.Name and (" (" .. mod.Name .. ")") or ""))
+  end
+end
+
+if not Synapse.Active then
+  function Synapse.Active()
+    local _, c = UnitClass("player")
+    if not c then return nil end
+    -- try exact, then upper as a defensive normalization
+    return Synapse.Modules[c] or Synapse.Modules[string.upper(c)]
+  end
+end
+
+-- Adopt any pending modules using whatever RegisterModule is available
+function Synapse.AdoptPendingModules()
+  if Synapse.PendingModules then
+    for class, mod in pairs(Synapse.PendingModules) do
+      Synapse.RegisterModule(class, mod)
+    end
+    Synapse.PendingModules = nil
+    dprint("Adopted pending modules.")
+  end
+end
+-- ***************************************************************************
+
 -- Provisional Click (Engine may override this later) -------------------------
 if not Synapse.Click then
   function Synapse.Click()
-    local active = nil
-    if Synapse.Active then
-      active = Synapse.Active()
-    end
+    local active = Synapse.Active and Synapse.Active() or nil
     if active and active.OnClick then
       dprint("Dispatching click to active module (provisional).")
       active:OnClick()
@@ -49,18 +87,14 @@ local function Synapse_Help()
   Synapse.Print("/synapse debug toggle   - flip debug on/off")
   Synapse.Print("/synapse module         - show active module info")
   Synapse.Print("/synapse repair         - adopt pending modules now")
+  Synapse.Print("/synapse diag           - show diag flags/modules")
 end
 
 local function Synapse_ShowStatus()
   local class = Synapse.PlayerClass() or "UNKNOWN"
   local dbg = (SynapseDB and SynapseDB.settings and SynapseDB.settings.debug) and "ON" or "OFF"
-  local hasActive = (Synapse.Active and Synapse.Active() and true) or false
-  local modName = "none"
-  if hasActive and Synapse.Active().Name then
-    modName = Synapse.Active().Name
-  elseif hasActive then
-    modName = class
-  end
+  local mod = Synapse.Active and Synapse.Active() or nil
+  local modName = (mod and (mod.Name or mod.Class)) or "none"
   Synapse.Print("Class: " .. class .. "  |  Active module: " .. modName .. "  |  Debug: " .. dbg)
 end
 
@@ -70,19 +104,16 @@ local function Synapse_SetDebug(on)
   Synapse.Print("Debug is now " .. (SynapseDB.settings.debug and "ON" or "OFF") .. ".")
 end
 
--- Adoption helper (safe to call anytime) ------------------------------------
-function Synapse.AdoptPendingModules()
-  if not Synapse.RegisterModule then
-    dprint("RegisterModule not ready; pending adoption deferred.")
-    return
+local function Synapse_Diag()
+  local hasEngineReg = (type(Synapse.RegisterModule) == "function")
+  local hasActive    = (type(Synapse.Active) == "function") and (Synapse.Active() ~= nil)
+  local keys = ""
+  for k,_ in pairs(Synapse.Modules) do
+    keys = (keys == "" and k) or (keys .. "," .. k)
   end
-  if Synapse.PendingModules then
-    for class, mod in pairs(Synapse.PendingModules) do
-      Synapse.RegisterModule(class, mod)
-    end
-    Synapse.PendingModules = nil
-    dprint("Adopted pending modules.")
-  end
+  Synapse.Print("Diag → RegisterModule:" .. (hasEngineReg and "yes" or "no")
+    .. "  Active():" .. (hasActive and "yes" or "no")
+    .. "  Modules:[" .. (keys ~= "" and keys or "none") .. "]")
 end
 
 SlashCmdList["SYNAPSE"] = function(msg)
@@ -94,10 +125,7 @@ SlashCmdList["SYNAPSE"] = function(msg)
     return
   end
 
-  if msg == "click" then
-    Synapse.Click()
-    return
-  end
+  if msg == "click" then Synapse.Click(); return end
 
   if string.find(msg, "^debug") then
     if msg == "debug on" then Synapse_SetDebug(true); return end
@@ -106,20 +134,18 @@ SlashCmdList["SYNAPSE"] = function(msg)
       Synapse_SetDebug(not (SynapseDB.settings and SynapseDB.settings.debug))
       return
     end
-    Synapse.Print("Usage: /synapse debug on|off|toggle")
-    return
+    Synapse.Print("Usage: /synapse debug on|off|toggle"); return
   end
 
-  if msg == "module" then
-    Synapse_ShowStatus()
-    return
-  end
+  if msg == "module" then Synapse_ShowStatus(); return end
 
   if msg == "repair" then
     Synapse.AdoptPendingModules()
     Synapse_ShowStatus()
     return
   end
+
+  if msg == "diag" then Synapse_Diag(); return end
 
   Synapse_Help()
 end
@@ -128,13 +154,12 @@ end
 local boot = CreateFrame("Frame")
 boot:RegisterEvent("PLAYER_LOGIN")
 boot:SetScript("OnEvent", function()
-  -- Adopt in case Modules loaded before Core/Engine
+  -- Always adopt with our fallbacks; Engine (if present) can override later.
   Synapse.AdoptPendingModules()
 
-  -- Friendly banner
   Synapse.Print("v0.1 loaded — type /synapse for help.", 0.1, 0.9, 0.3)
 
-  -- If Core/Engine provided Active() + module OnLogin hook, call it
+  -- If a module has an OnLogin hook, let it run.
   if Synapse.Active then
     local mod = Synapse.Active()
     if mod and mod.OnLogin then

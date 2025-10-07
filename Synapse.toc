@@ -6,8 +6,8 @@
 ## SavedVariables: SynapseDB
 
 Synapse.lua
-Core/Utils.lua
-Core/Engine.lua
-Core/Events.lua
-Modules/Rogue.lua
+Core\Utils.lua
+Core\Engine.lua
+Core\Events.lua
+Modules\Rogue.lua
 Bindings.xml

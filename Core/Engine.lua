@@ -16,9 +16,7 @@ Synapse.Modules = Synapse.Modules or {}
 -- Player class (token like "ROGUE")
 local function PlayerClass()
   local _, class = UnitClass("player")
-  -- Normalize defensively (some private cores return weird casing)
   if type(class) == "string" then
-    -- upper in a Lua 5.0 friendly way:
     class = string.gsub(class, "%a", function(c)
       local b = string.byte(c)
       if b >= 97 and b <= 122 then return string.char(b - 32) end
@@ -38,15 +36,24 @@ end
 function Synapse.Active()
   local c = PlayerClass()
   if not c then return nil end
-  -- Try exact, then uppercase key (in case a module registered with a different case)
-  local mod = Synapse.Modules[c]
-  if not mod and type(c) == "string" then
-    mod = Synapse.Modules[string.upper(c)]
-  end
+  local mod = Synapse.Modules[c] or Synapse.Modules[string.upper(c)]
   return mod
 end
 
--- Engine-owned Click (overrides provisional one from Synapse.lua)
+-- Shared combat scratch (kick/cast + reactive windows like Riposte)
+Synapse.Combat = Synapse.Combat or {
+  TargetCastingExpire = 0,  -- GetTime()-based expiry
+  TargetLastCastName  = nil,
+  RiposteExpire       = 0,  -- set briefly when you PARRY; consumed in Rogue
+}
+
+-- Helper: target plausibly casting?
+function Synapse.IsTargetCasting()
+  local now = GetTime()
+  return (Synapse.Combat.TargetCastingExpire or 0) > now
+end
+
+-- Engine-owned Click (overrides provisional)
 function Synapse.Click()
   local mod = Synapse.Active()
   if mod and mod.OnClick then
